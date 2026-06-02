@@ -446,6 +446,12 @@ export const REQUIREMENTS: Record<string, Requirement> = {
             'The handle returned by registerTool can .update() description/schema/handler; changes reflect in subsequent tools/list and tools/call and trigger list_changed.',
         note: 'Under stateless hosting each request is served by a new server instance, so state set up earlier in the session cannot be observed.'
     },
+    'mcpserver:tool:handle-update-related-request': {
+        transports: ['streamableHttpStateless'],
+        source: 'sdk',
+        behavior:
+            'When a tool handler updates another RegisteredTool during stateless Streamable HTTP tools/call handling, the tools/list_changed notification is delivered on the originating POST response stream.'
+    },
     'typescript:mcpserver:tool:handler-throws': {
         source: 'sdk',
         behavior: "A tool handler that throws is converted to {isError:true, content:[{type:'text', text:<message>}]}."

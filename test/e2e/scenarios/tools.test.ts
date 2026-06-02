@@ -1046,6 +1046,33 @@ verifies('mcpserver:tool:handle-update', async ({ transport }: TestArgs) => {
     expect(r.content).toEqual([{ type: 'text', text: 'echo-v2-handler' }]);
 });
 
+verifies('mcpserver:tool:handle-update-related-request', async ({ transport }: TestArgs) => {
+    const makeServer = () => {
+        const s = new McpServer({ name: 's', version: '0' });
+        const gated = s.registerTool('gated', { inputSchema: z.object({}) }, () => ({ content: [] }));
+        gated.disable();
+        s.registerTool('activate', { inputSchema: z.object({}) }, () => {
+            gated.enable();
+            return { content: [{ type: 'text', text: 'activated' }] };
+        });
+        return s;
+    };
+
+    let listChanged = 0;
+    const client = newClient();
+    client.setNotificationHandler('notifications/tools/list_changed', () => {
+        listChanged++;
+    });
+    await using _ = await wire(transport, makeServer, client);
+
+    const before = await client.listTools();
+    expect(before.tools.map(t => t.name).toSorted()).toEqual(['activate']);
+
+    const result = await client.callTool({ name: 'activate', arguments: {} });
+    expect(result.content).toEqual([{ type: 'text', text: 'activated' }]);
+    await vi.waitFor(() => expect(listChanged).toBe(1));
+});
+
 verifies('mcpserver:tool:input-validation', async ({ transport }: TestArgs) => {
     // Shared across factory calls so stateless still observes the count.
     const handlerCalls = { n: 0 };

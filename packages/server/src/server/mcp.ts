@@ -13,6 +13,7 @@ import type {
     ListResourcesResult,
     ListToolsResult,
     LoggingMessageNotification,
+    NotificationOptions,
     Prompt,
     PromptReference,
     ReadResourceResult,
@@ -73,6 +74,7 @@ export class McpServer {
     private _registeredTools: { [name: string]: RegisteredTool } = {};
     private _registeredPrompts: { [name: string]: RegisteredPrompt } = {};
     private _experimental?: { tasks: ExperimentalMcpServerTasks };
+    private _handlerNotificationOptions?: NotificationOptions;
 
     constructor(serverInfo: Implementation, options?: ServerOptions) {
         this.server = new Server(serverInfo, options);
@@ -301,7 +303,17 @@ export class McpServer {
      */
     private async executeToolHandler(tool: RegisteredTool, args: unknown, ctx: ServerContext): Promise<CallToolResult | CreateTaskResult> {
         // Executor encapsulates handler invocation with proper types
-        return tool.executor(args, ctx);
+        return this.withHandlerNotificationOptions(ctx, () => tool.executor(args, ctx));
+    }
+
+    private async withHandlerNotificationOptions<T>(ctx: ServerContext, fn: () => T | Promise<T>): Promise<T> {
+        const previous = this._handlerNotificationOptions;
+        this._handlerNotificationOptions = { relatedRequestId: ctx.mcpReq.id };
+        try {
+            return await fn();
+        } finally {
+            this._handlerNotificationOptions = previous;
+        }
     }
 
     /**
@@ -318,7 +330,7 @@ export class McpServer {
 
         // Validate input and create task using the executor
         const args = await this.validateToolInput(tool, request.params.arguments, request.params.name);
-        const createTaskResult = (await tool.executor(args, ctx)) as CreateTaskResult;
+        const createTaskResult = (await this.executeToolHandler(tool, args, ctx)) as CreateTaskResult;
 
         // Poll until completion
         const taskId = createTaskResult.task.taskId;
@@ -489,14 +501,14 @@ export class McpServer {
                 if (!resource.enabled) {
                     throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Resource ${uri} disabled`);
                 }
-                return resource.readCallback(uri, ctx);
+                return this.withHandlerNotificationOptions(ctx, () => resource.readCallback(uri, ctx));
             }
 
             // Then check templates
             for (const template of Object.values(this._registeredResourceTemplates)) {
                 const variables = template.resourceTemplate.uriTemplate.match(uri.toString());
                 if (variables) {
-                    return template.readCallback(uri, variables, ctx);
+                    return this.withHandlerNotificationOptions(ctx, () => template.readCallback(uri, variables, ctx));
                 }
             }
 
@@ -550,7 +562,7 @@ export class McpServer {
             }
 
             // Handler encapsulates parsing and callback invocation with proper types
-            return prompt.handler(request.params.arguments, ctx);
+            return this.withHandlerNotificationOptions(ctx, () => prompt.handler(request.params.arguments, ctx));
         });
 
         this._promptHandlersInitialized = true;
@@ -1029,7 +1041,7 @@ export class McpServer {
      */
     sendResourceListChanged() {
         if (this.isConnected()) {
-            this.server.sendResourceListChanged();
+            this.server.sendResourceListChanged(this._handlerNotificationOptions);
         }
     }
 
@@ -1038,7 +1050,7 @@ export class McpServer {
      */
     sendToolListChanged() {
         if (this.isConnected()) {
-            this.server.sendToolListChanged();
+            this.server.sendToolListChanged(this._handlerNotificationOptions);
         }
     }
 
@@ -1047,7 +1059,7 @@ export class McpServer {
      */
     sendPromptListChanged() {
         if (this.isConnected()) {
-            this.server.sendPromptListChanged();
+            this.server.sendPromptListChanged(this._handlerNotificationOptions);
         }
     }
 }
