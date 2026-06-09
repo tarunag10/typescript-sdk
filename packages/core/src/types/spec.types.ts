@@ -210,7 +210,7 @@ export interface JSONRPCResultResponse {
  */
 export interface JSONRPCErrorResponse {
     jsonrpc: typeof JSONRPC_VERSION;
-    id?: RequestId;
+    id?: RequestId | null;
     error: Error;
 }
 

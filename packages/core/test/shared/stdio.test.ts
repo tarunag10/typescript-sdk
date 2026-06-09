@@ -1,4 +1,4 @@
-import { ReadBuffer } from '../../src/shared/stdio.js';
+import { JSONRPCMessageParseError, ReadBuffer } from '../../src/shared/stdio.js';
 import type { JSONRPCMessage } from '../../src/types/index.js';
 
 const testMessage: JSONRPCMessage = {
@@ -111,5 +111,45 @@ describe('non-JSON line filtering', () => {
         readBuffer.append(Buffer.from('{"not": "a jsonrpc message"}\n'));
 
         expect(() => readBuffer.readMessage()).toThrow();
+    });
+
+    test('should preserve a recoverable request id for invalid request responses', () => {
+        const readBuffer = new ReadBuffer();
+        readBuffer.append(Buffer.from('{"id":99,"method":"tools/list","params":{}}\n'));
+
+        try {
+            readBuffer.readMessage();
+            throw new Error('Expected invalid JSON-RPC message');
+        } catch (error) {
+            expect(error).toBeInstanceOf(JSONRPCMessageParseError);
+            expect((error as JSONRPCMessageParseError).toInvalidRequestResponse()).toEqual({
+                jsonrpc: '2.0',
+                id: 99,
+                error: {
+                    code: -32600,
+                    message: 'Invalid Request'
+                }
+            });
+        }
+    });
+
+    test('should map invalid batch frames to an id:null invalid request response', () => {
+        const readBuffer = new ReadBuffer();
+        readBuffer.append(Buffer.from('[{"jsonrpc":"2.0","id":100,"method":"tools/list"}]\n'));
+
+        try {
+            readBuffer.readMessage();
+            throw new Error('Expected invalid JSON-RPC message');
+        } catch (error) {
+            expect(error).toBeInstanceOf(JSONRPCMessageParseError);
+            expect((error as JSONRPCMessageParseError).toInvalidRequestResponse()).toEqual({
+                jsonrpc: '2.0',
+                id: null,
+                error: {
+                    code: -32600,
+                    message: 'Invalid Request'
+                }
+            });
+        }
     });
 });

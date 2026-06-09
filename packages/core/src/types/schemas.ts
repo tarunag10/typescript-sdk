@@ -159,7 +159,7 @@ export const JSONRPCResultResponseSchema = z
 export const JSONRPCErrorResponseSchema = z
     .object({
         jsonrpc: z.literal(JSONRPC_VERSION),
-        id: RequestIdSchema.optional(),
+        id: z.union([RequestIdSchema, z.null()]).optional(),
         error: z.object({
             /**
              * The error type that occurred.

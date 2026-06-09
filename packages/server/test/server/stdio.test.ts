@@ -1,7 +1,8 @@
 import { Readable, Writable } from 'node:stream';
+import { setImmediate as setImmediatePromise } from 'node:timers/promises';
 
 import type { JSONRPCMessage } from '@modelcontextprotocol/core';
-import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/core';
+import { JSONRPCMessageParseError, ReadBuffer, serializeMessage } from '@modelcontextprotocol/core';
 
 import { StdioServerTransport } from '../../src/server/stdio.js';
 
@@ -178,4 +179,50 @@ test('should fire onerror before onclose on stdout error', async () => {
     output.emit('error', new Error('EPIPE'));
 
     expect(events).toEqual(['error', 'close']);
+});
+
+test('should respond with Invalid Request when schema validation fails but request id is recoverable', async () => {
+    const server = new StdioServerTransport(input, output);
+    const errors: Error[] = [];
+    server.onerror = error => {
+        errors.push(error);
+    };
+
+    await server.start();
+    input.push('{"id":99,"method":"tools/list","params":{}}\n');
+    await setImmediatePromise();
+
+    expect(outputBuffer.readMessage()).toEqual({
+        jsonrpc: '2.0',
+        id: 99,
+        error: {
+            code: -32600,
+            message: 'Invalid Request'
+        }
+    });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(JSONRPCMessageParseError);
+});
+
+test('should respond with Invalid Request and id:null for invalid batch frames', async () => {
+    const server = new StdioServerTransport(input, output);
+    const errors: Error[] = [];
+    server.onerror = error => {
+        errors.push(error);
+    };
+
+    await server.start();
+    input.push('[{"jsonrpc":"2.0","id":100,"method":"tools/list"}]\n');
+    await setImmediatePromise();
+
+    expect(outputBuffer.readMessage()).toEqual({
+        jsonrpc: '2.0',
+        id: null,
+        error: {
+            code: -32600,
+            message: 'Invalid Request'
+        }
+    });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(JSONRPCMessageParseError);
 });

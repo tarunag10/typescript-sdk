@@ -1,4 +1,5 @@
-import type { JSONRPCMessage } from '../types/index.js';
+import { INVALID_REQUEST } from '../types/constants.js';
+import type { JSONRPCErrorResponse, JSONRPCMessage, RequestId } from '../types/index.js';
 import { JSONRPCMessageSchema } from '../types/index.js';
 
 /**
@@ -41,8 +42,59 @@ export class ReadBuffer {
     }
 }
 
+export class JSONRPCMessageParseError extends Error {
+    constructor(
+        public readonly parsedValue: unknown,
+        public readonly cause: unknown
+    ) {
+        super('Invalid JSON-RPC message');
+        this.name = 'JSONRPCMessageParseError';
+    }
+
+    recoverRequestId(): RequestId | null | undefined {
+        if (Array.isArray(this.parsedValue)) {
+            return null;
+        }
+
+        if (this.parsedValue && typeof this.parsedValue === 'object' && 'id' in this.parsedValue) {
+            const requestId = (this.parsedValue as { id?: unknown }).id;
+            if (typeof requestId === 'string') {
+                return requestId;
+            }
+
+            if (typeof requestId === 'number' && Number.isInteger(requestId)) {
+                return requestId;
+            }
+        }
+
+        return undefined;
+    }
+
+    toInvalidRequestResponse(): JSONRPCErrorResponse | undefined {
+        const id = this.recoverRequestId();
+        if (id === undefined) {
+            return undefined;
+        }
+
+        return {
+            jsonrpc: '2.0',
+            id,
+            error: {
+                code: INVALID_REQUEST,
+                message: 'Invalid Request'
+            }
+        };
+    }
+}
+
 export function deserializeMessage(line: string): JSONRPCMessage {
-    return JSONRPCMessageSchema.parse(JSON.parse(line));
+    const parsedValue = JSON.parse(line);
+    const message = JSONRPCMessageSchema.safeParse(parsedValue);
+    if (message.success) {
+        return message.data;
+    }
+
+    throw new JSONRPCMessageParseError(parsedValue, message.error);
 }
 
 export function serializeMessage(message: JSONRPCMessage): string {
