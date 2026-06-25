@@ -324,8 +324,8 @@ describe('integration', () => {
         expect(output).toContain('const h: Headers');
         expect(output).not.toContain('IsomorphicHeaders');
 
-        // StreamableHTTPError renamed to SdkError
-        expect(output).toContain('instanceof SdkError');
+        // StreamableHTTPError renamed to SdkHttpError
+        expect(output).toContain('instanceof SdkHttpError');
         expect(output).not.toContain('StreamableHTTPError');
 
         // schemaToJson removed (import gone)
@@ -573,7 +573,7 @@ describe('integration', () => {
         expect(result.packageJsonChanges!.removed).toContain('@modelcontextprotocol/sdk');
     });
 
-    it('emits diagnostics for removed imports', () => {
+    it('emits info diagnostics for legacy-moved imports', () => {
         const dir = createTempDir();
         const input = [
             `import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';`,
@@ -586,7 +586,7 @@ describe('integration', () => {
         const result = run(migration, { targetDir: dir });
 
         expect(result.diagnostics.length).toBeGreaterThan(0);
-        expect(result.diagnostics.some(d => d.level === DiagnosticLevel.Warning)).toBe(true);
+        expect(result.diagnostics.some(d => d.level === DiagnosticLevel.Info)).toBe(true);
     });
 
     it('transform ordering: critical dependencies are maintained', () => {

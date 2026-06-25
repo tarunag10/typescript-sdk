@@ -3,7 +3,8 @@ import { Node, SyntaxKind } from 'ts-morph';
 
 import { SPEC_SCHEMA_NAMES, specSchemaToTypeName } from '../../../generated/specSchemaMap.js';
 import type { Diagnostic, Transform, TransformContext, TransformResult } from '../../../types.js';
-import { warning } from '../../../utils/diagnostics.js';
+import { isKeyPositionIdentifier } from '../../../utils/astUtils.js';
+import { actionRequired, warning } from '../../../utils/diagnostics.js';
 import { addOrMergeImport, isAnyMcpSpecifier, removeUnusedImport } from '../../../utils/importUtils.js';
 
 export const specSchemaAccessTransform: Transform = {
@@ -70,9 +71,9 @@ function handleReference(
     // Pattern: z.infer<typeof XSchema> — type position
     if (isTypeofInTypePosition(ref)) {
         diagnostics.push(
-            warning(
+            actionRequired(
                 sourceFile.getFilePath(),
-                ref.getStartLineNumber(),
+                ref,
                 `Replace \`z.infer<typeof ${localName}>\` with the \`${typeName}\` type (already exported from the same v2 package).`
             )
         );
@@ -100,28 +101,15 @@ function handleReference(
             return rewriteCapturedSafeParse(safeParseCall, localName, typeName, sourceFile, diagnostics);
         }
 
-        diagnostics.push(
-            warning(
-                sourceFile.getFilePath(),
-                ref.getStartLineNumber(),
-                `${localName}.safeParse() not available in v2. Use \`isSpecType.${typeName}(value)\` for boolean validation, ` +
-                    `or \`specTypeSchemas.${typeName}['~standard'].validate(value)\` for full result.`
-            )
-        );
-        return false;
+        return rewriteUnsupportedSchemaCall(ref, safeParseCall, localName, typeName, 'safeParse', sourceFile, diagnostics);
     }
 
-    // Pattern: XSchema.parse(v) — diagnostic only
+    // Pattern: XSchema.parse(v) — rewrite to the StandardSchema validate() primitive (or, when the
+    // result is used, swap the identifier) so we never leave behind an import of a non-exported schema.
     if (isParsePattern(ref)) {
-        diagnostics.push(
-            warning(
-                sourceFile.getFilePath(),
-                ref.getStartLineNumber(),
-                `${localName}.parse() not available in v2. Use \`isSpecType.${typeName}(value)\` for validation, ` +
-                    `or \`specTypeSchemas.${typeName}['~standard'].validate(value)\` and check for issues.`
-            )
-        );
-        return false;
+        const parseAccess = ref.getParent() as import('ts-morph').PropertyAccessExpression;
+        const parseCall = parseAccess.getParent() as import('ts-morph').CallExpression;
+        return rewriteUnsupportedSchemaCall(ref, parseCall, localName, typeName, 'parse', sourceFile, diagnostics);
     }
 
     // Pattern: XSchema used as value (function arg, assignment, etc.)
@@ -142,9 +130,9 @@ function handleReference(
 
     if (parent && Node.isExportSpecifier(parent)) {
         diagnostics.push(
-            warning(
+            actionRequired(
                 sourceFile.getFilePath(),
-                ref.getStartLineNumber(),
+                ref,
                 `Re-export of ${localName} requires manual update: replace with specTypeSchemas.${typeName} or remove.`
             )
         );
@@ -165,15 +153,7 @@ function handleReference(
         return true;
     }
 
-    if (parent && Node.isPropertyAssignment(parent) && parent.getNameNode() === ref) {
-        return false;
-    }
-
-    if (parent && Node.isBindingElement(parent) && parent.getPropertyNameNode() === ref) {
-        return false;
-    }
-
-    if (parent && Node.isPropertyAccessExpression(parent) && parent.getNameNode() === ref) {
+    if (parent && isKeyPositionIdentifier(ref)) {
         return false;
     }
 
@@ -301,9 +281,9 @@ function rewriteCapturedSafeParse(
                         replacements.push({ node: errorParent, newText: `${varName}.issues?.map(i => i.message).join(', ')` });
                     } else {
                         diagnostics.push(
-                            warning(
+                            actionRequired(
                                 sourceFile.getFilePath(),
-                                errorParent.getStartLineNumber(),
+                                errorParent,
                                 `${varName}.error.${subProp} has no StandardSchema equivalent. Manual migration required.`
                             )
                         );
@@ -331,6 +311,68 @@ function rewriteCapturedSafeParse(
         )
     );
 
+    return true;
+}
+
+/**
+ * Handles spec-schema usages that have no behavior-preserving v2 equivalent: the Zod-only
+ * methods `.parse()` and (uncaptured) `.safeParse()`. In v2 these schemas are StandardSchemaV1
+ * values that are NOT named public exports, so leaving the original import in place produces an
+ * unresolved-import error (e.g. `PromptSchema` is not exported by `@modelcontextprotocol/server`).
+ *
+ * - Result discarded (validation for side-effect only): rewrite `XSchema.parse(v)` →
+ *   `specTypeSchemas.T['~standard'].validate(v)` so the code compiles. NOTE: `validate()` does not
+ *   throw, so `.parse()`'s throw-on-invalid behavior is lost — flagged via an actionRequired comment.
+ * - Result used: swap only the identifier to `specTypeSchemas.T` so the import resolves; the
+ *   `.parse()`/`.safeParse()` call and its result shape still need a manual fix (flagged).
+ *
+ * Either way the original (now non-exported) schema import is dropped by the caller's
+ * removeUnusedImport, so no dangling import survives.
+ */
+function rewriteUnsupportedSchemaCall(
+    ref: import('ts-morph').Node,
+    callNode: import('ts-morph').CallExpression,
+    localName: string,
+    typeName: string,
+    method: 'parse' | 'safeParse',
+    sourceFile: SourceFile,
+    diagnostics: Diagnostic[]
+): boolean {
+    const resultDiscarded = Node.isExpressionStatement(callNode.getParent());
+
+    if (resultDiscarded) {
+        const argText = callNode
+            .getArguments()
+            .map(a => a.getText())
+            .join(', ');
+        const semantics =
+            method === 'parse'
+                ? 'validate() does NOT throw on invalid input (parse() did) — if you relied on that, add `if (result.issues) throw …`.'
+                : 'the result shape changed from { success, data, error } to { value, issues }.';
+        diagnostics.push(
+            actionRequired(
+                sourceFile.getFilePath(),
+                callNode,
+                `Rewrote ${localName}.${method}() to specTypeSchemas.${typeName}['~standard'].validate(): ` +
+                    `v2 spec schemas are StandardSchemaV1, not Zod. Note: ${semantics}`
+            )
+        );
+        callNode.replaceWithText(`specTypeSchemas.${typeName}['~standard'].validate(${argText})`);
+        ensureImport(sourceFile, 'specTypeSchemas');
+        return true;
+    }
+
+    diagnostics.push(
+        actionRequired(
+            sourceFile.getFilePath(),
+            ref,
+            `${localName}.${method}() is not available on v2 spec schemas (StandardSchemaV1, not Zod). ` +
+                `Replaced ${localName} with specTypeSchemas.${typeName}; rewrite the .${method}(...) call using ` +
+                `specTypeSchemas.${typeName}['~standard'].validate(...) (returns { value, issues }, does not throw).`
+        )
+    );
+    ref.replaceWithText(`specTypeSchemas.${typeName}`);
+    ensureImport(sourceFile, 'specTypeSchemas');
     return true;
 }
 

@@ -87,6 +87,7 @@ const LOCAL_PACKAGE_DIRS: Record<string, string> = {
     '@modelcontextprotocol/client': path.join(SDK_ROOT, 'packages/client'),
     '@modelcontextprotocol/core': path.join(SDK_ROOT, 'packages/core'),
     '@modelcontextprotocol/server': path.join(SDK_ROOT, 'packages/server'),
+    '@modelcontextprotocol/server-legacy': path.join(SDK_ROOT, 'packages/server-legacy'),
     '@modelcontextprotocol/express': path.join(SDK_ROOT, 'packages/middleware/express'),
     '@modelcontextprotocol/fastify': path.join(SDK_ROOT, 'packages/middleware/fastify'),
     '@modelcontextprotocol/hono': path.join(SDK_ROOT, 'packages/middleware/hono'),
@@ -353,7 +354,7 @@ function main(): void {
                 codemodResult = run(migration, { targetDir: fullSourceDir, verbose: true });
             } catch (error) {
                 console.log(`    ERROR: codemod threw: ${error}`);
-                codemodResult = { filesChanged: 0, totalChanges: 0, diagnostics: [], fileResults: [] };
+                codemodResult = { filesChanged: 0, totalChanges: 0, diagnostics: [], fileResults: [], commentCount: 0 };
             }
             console.log(
                 `    Codemod: files=${codemodResult.filesChanged} changes=${codemodResult.totalChanges} diags=${codemodResult.diagnostics.length}`
