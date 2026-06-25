@@ -1105,12 +1105,7 @@ export const REQUIREMENTS: Record<string, Requirement> = {
 
     'pagination:invalid-cursor': {
         source: 'https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination#error-handling',
-        behavior: 'A list request with an invalid cursor returns JSON-RPC error -32602 (Invalid params).',
-        knownFailures: [
-            {
-                note: 'McpServer does not implement automatic pagination — handlers receive the cursor but the high-level API ignores invalid cursors instead of returning -32602.'
-            }
-        ]
+        behavior: 'A list request with an invalid cursor returns JSON-RPC error -32602 (Invalid params).'
     },
     'pagination:client:cursor-handling': {
         source: 'https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination#implementation-guidelines',
