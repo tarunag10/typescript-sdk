@@ -9,6 +9,7 @@ import type {
     Implementation,
     ListPromptsResult,
     ListResourcesResult,
+    ListResourceTemplatesResult,
     ListToolsResult,
     LoggingMessageNotification,
     Prompt,
@@ -42,6 +43,22 @@ import type * as z from 'zod/v4';
 import { getCompleter, isCompletable } from './completable.js';
 import type { ServerOptions } from './server.js';
 import { Server } from './server.js';
+
+const DEFAULT_LIST_PAGE_SIZE = 100;
+
+function paginate<T>(items: T[], cursor: string | undefined): { page: T[]; nextCursor?: string } {
+    const offset = cursor === undefined ? 0 : Number.parseInt(cursor, 10);
+    if (cursor !== undefined && (!Number.isSafeInteger(offset) || offset < 0 || String(offset) !== cursor || offset > items.length)) {
+        throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Invalid pagination cursor: ${cursor}`);
+    }
+
+    const page = items.slice(offset, offset + DEFAULT_LIST_PAGE_SIZE);
+    const nextOffset = offset + page.length;
+    return {
+        page,
+        nextCursor: nextOffset < items.length ? String(nextOffset) : undefined
+    };
+}
 
 /**
  * High-level MCP server that provides a simpler API for working with resources, tools, and prompts.
@@ -130,33 +147,32 @@ export class McpServer {
         // Note: tools are listed in registration (insertion) order, which keeps the ordering
         // deterministic across requests when the underlying tool set has not changed, as
         // recommended by the spec.
-        this.server.setRequestHandler(
-            'tools/list',
-            (): ListToolsResult => ({
-                tools: Object.entries(this._registeredTools)
-                    .filter(([, tool]) => tool.enabled)
-                    .map(([name, tool]): Tool => {
-                        const toolDefinition: Tool = {
-                            name,
-                            title: tool.title,
-                            description: tool.description,
-                            inputSchema: tool.inputSchema
-                                ? (standardSchemaToJsonSchema(tool.inputSchema, 'input') as Tool['inputSchema'])
-                                : EMPTY_OBJECT_JSON_SCHEMA,
-                            annotations: tool.annotations,
-                            icons: tool.icons,
-                            execution: tool.execution,
-                            _meta: tool._meta
-                        };
+        this.server.setRequestHandler('tools/list', (request): ListToolsResult => {
+            const tools = Object.entries(this._registeredTools)
+                .filter(([, tool]) => tool.enabled)
+                .map(([name, tool]): Tool => {
+                    const toolDefinition: Tool = {
+                        name,
+                        title: tool.title,
+                        description: tool.description,
+                        inputSchema: tool.inputSchema
+                            ? (standardSchemaToJsonSchema(tool.inputSchema, 'input') as Tool['inputSchema'])
+                            : EMPTY_OBJECT_JSON_SCHEMA,
+                        annotations: tool.annotations,
+                        icons: tool.icons,
+                        execution: tool.execution,
+                        _meta: tool._meta
+                    };
 
-                        if (tool.outputSchema) {
-                            toolDefinition.outputSchema = standardSchemaToJsonSchema(tool.outputSchema, 'output') as Tool['outputSchema'];
-                        }
+                    if (tool.outputSchema) {
+                        toolDefinition.outputSchema = standardSchemaToJsonSchema(tool.outputSchema, 'output') as Tool['outputSchema'];
+                    }
 
-                        return toolDefinition;
-                    })
-            })
-        );
+                    return toolDefinition;
+                });
+            const { page, nextCursor } = paginate(tools, request.params?.cursor);
+            return { tools: page, nextCursor };
+        });
 
         this.server.setRequestHandler('tools/call', async (request, ctx): Promise<CallToolResult> => {
             const tool = this._registeredTools[request.params.name];
@@ -368,7 +384,7 @@ export class McpServer {
             }
         });
 
-        this.server.setRequestHandler('resources/list', async (_request, ctx) => {
+        this.server.setRequestHandler('resources/list', async (request, ctx): Promise<ListResourcesResult> => {
             const resources = Object.entries(this._registeredResources)
                 .filter(([_, resource]) => resource.enabled)
                 .map(([uri, resource]) => ({
@@ -393,17 +409,19 @@ export class McpServer {
                 }
             }
 
-            return { resources: [...resources, ...templateResources] };
+            const { page, nextCursor } = paginate([...resources, ...templateResources], request.params?.cursor);
+            return { resources: page, nextCursor };
         });
 
-        this.server.setRequestHandler('resources/templates/list', async () => {
+        this.server.setRequestHandler('resources/templates/list', async (request): Promise<ListResourceTemplatesResult> => {
             const resourceTemplates = Object.entries(this._registeredResourceTemplates).map(([name, template]) => ({
                 name,
                 uriTemplate: template.resourceTemplate.uriTemplate.toString(),
                 ...template.metadata
             }));
 
-            return { resourceTemplates };
+            const { page, nextCursor } = paginate(resourceTemplates, request.params?.cursor);
+            return { resourceTemplates: page, nextCursor };
         });
 
         this.server.setRequestHandler('resources/read', async (request, ctx) => {
@@ -448,23 +466,22 @@ export class McpServer {
             }
         });
 
-        this.server.setRequestHandler(
-            'prompts/list',
-            (): ListPromptsResult => ({
-                prompts: Object.entries(this._registeredPrompts)
-                    .filter(([, prompt]) => prompt.enabled)
-                    .map(([name, prompt]): Prompt => {
-                        return {
-                            name,
-                            title: prompt.title,
-                            description: prompt.description,
-                            arguments: prompt.argsSchema ? promptArgumentsFromStandardSchema(prompt.argsSchema) : undefined,
-                            icons: prompt.icons,
-                            _meta: prompt._meta
-                        };
-                    })
-            })
-        );
+        this.server.setRequestHandler('prompts/list', (request): ListPromptsResult => {
+            const prompts = Object.entries(this._registeredPrompts)
+                .filter(([, prompt]) => prompt.enabled)
+                .map(([name, prompt]): Prompt => {
+                    return {
+                        name,
+                        title: prompt.title,
+                        description: prompt.description,
+                        arguments: prompt.argsSchema ? promptArgumentsFromStandardSchema(prompt.argsSchema) : undefined,
+                        icons: prompt.icons,
+                        _meta: prompt._meta
+                    };
+                });
+            const { page, nextCursor } = paginate(prompts, request.params?.cursor);
+            return { prompts: page, nextCursor };
+        });
 
         this.server.setRequestHandler('prompts/get', async (request, ctx): Promise<GetPromptResult> => {
             const prompt = this._registeredPrompts[request.params.name];
